@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("Gridrunner")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+b6b535361af2949e733652a845c35435ddc143c5")]
 [assembly: System.Reflection.AssemblyProductAttribute("Gridrunner")]
 [assembly: System.Reflection.AssemblyTitleAttribute("Gridrunner")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
