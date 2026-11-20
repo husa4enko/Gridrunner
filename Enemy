@@ -1,0 +1,28 @@
+
+using Microsoft.Xna.Framework;
+using System.Collections.Generic;
+namespace Gridrunner;
+
+public class Enemy
+{
+    public const int MaxHealth = 2;
+
+    public Point Tile { get; set; }
+
+    public int Health { get; private set; } = MaxHealth;
+
+    public Enemy(Point tile)
+    {
+        Tile = tile;
+    }
+
+    public void TakeDamage(int damage)
+    {
+        Health -= damage;
+
+        if (Health < 0)
+            Health = 0;
+    }
+
+    public bool IsAlive => Health > 0;
+}

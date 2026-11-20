@@ -1,0 +1,161 @@
+
+using System;
+using System.Collections.Generic;
+using Microsoft.Xna.Framework;
+
+namespace Gridrunner;
+public class EnemyAI
+{
+    private readonly Arena _arena;
+
+    private static readonly Point[] Directions =
+    {
+        new Point(0, -1), // Up
+        new Point(0, 1),  // Down
+        new Point(-1, 0), // Left
+        new Point(1, 0)   // Right
+    };
+
+    public EnemyAI(Arena arena)
+    {
+        _arena = arena;
+    }
+
+    public void TakeEnemyTurn(
+        List<Enemy> enemies,
+        List<Operative> operatives)
+    {
+        for (int i = 0; i < enemies.Count; i++)
+        {
+            Enemy enemy = enemies[i];
+
+            if (!enemy.IsAlive || operatives.Count == 0)
+                continue;
+
+            // Attack an operative if one is adjacent.
+            Operative target = FindAdjacentOperative(enemy, operatives);
+
+            if (target != null)
+            {
+                target.TakeDamage(1);
+                continue;
+            }
+
+            // Otherwise, move one tile towards an operative.
+            MoveTowardsOperative(enemy, enemies, operatives);
+        }
+
+        // Remove defeated operatives after the enemy phase.
+        operatives.RemoveAll(operative => !operative.IsAlive);
+    }
+
+    private Operative FindAdjacentOperative(
+        Enemy enemy,
+        List<Operative> operatives)
+    {
+        foreach (Operative operative in operatives)
+        {
+            if (IsAdjacent(enemy.Tile, operative.Tile))
+                return operative;
+        }
+
+        return null;
+    }
+
+    private void MoveTowardsOperative(
+        Enemy enemy,
+        List<Enemy> enemies,
+        List<Operative> operatives)
+    {
+        Queue<(Point Tile, Point FirstStep)> queue = new();
+
+        HashSet<Point> visited = new();
+
+        queue.Enqueue((enemy.Tile, enemy.Tile));
+        visited.Add(enemy.Tile);
+
+        while (queue.Count > 0)
+        {
+            var current = queue.Dequeue();
+
+            foreach (Point direction in Directions)
+            {
+                Point next = current.Tile + direction;
+
+                if (!IsInsideArena(next))
+                    continue;
+
+                if (visited.Contains(next))
+                    continue;
+
+                if (_arena.GetTile(next.X, next.Y) != TileType.Floor)
+                    continue;
+
+                // Do not move through another enemy.
+                bool occupiedByEnemy = false;
+
+                foreach (Enemy other in enemies)
+                {
+                    if (other != enemy && other.Tile == next)
+                    {
+                        occupiedByEnemy = true;
+                        break;
+                    }
+                }
+
+                if (occupiedByEnemy)
+                    continue;
+
+                // Do not move onto an operative.
+                bool occupiedByOperative = false;
+
+                foreach (Operative operative in operatives)
+                {
+                    if (operative.Tile == next)
+                    {
+                        occupiedByOperative = true;
+                        break;
+                    }
+                }
+
+                if (occupiedByOperative)
+                    continue;
+
+                visited.Add(next);
+
+                Point firstStep = current.Tile == enemy.Tile
+                    ? next
+                    : current.FirstStep;
+
+                // Stop when we find a tile adjacent to an operative.
+                foreach (Operative operative in operatives)
+                {
+                    if (IsAdjacent(next, operative.Tile))
+                    {
+                        enemy.Tile = firstStep;
+                        return;
+                    }
+                }
+
+                queue.Enqueue((next, firstStep));
+            }
+        }
+    }
+
+    private static bool IsAdjacent(Point a, Point b)
+    {
+        int distance =
+            System.Math.Abs(a.X - b.X) +
+            System.Math.Abs(a.Y - b.Y);
+
+        return distance == 1;
+    }
+
+    private static bool IsInsideArena(Point tile)
+    {
+        return tile.X >= 0 &&
+               tile.X < Arena.Columns &&
+               tile.Y >= 0 &&
+               tile.Y < Arena.Rows;
+    }
+}

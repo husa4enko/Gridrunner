@@ -1,4 +1,5 @@
-﻿using System;
+﻿
+using System;
 using System.Collections.Generic;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
@@ -15,7 +16,11 @@ public class Game1 : Game
 
     private readonly GraphicsDeviceManager _graphics;
     private readonly Arena _arena = new();
+
     private readonly List<Operative> _operatives = new();
+    private readonly List<Enemy> _enemies = new();
+
+    private readonly EnemyAI _enemyAI;
 
     private SpriteBatch _spriteBatch = null!;
     private Texture2D _pixel = null!;
@@ -26,6 +31,10 @@ public class Game1 : Game
     private MouseState _previousMouseState;
     private KeyboardState _previousKeyboardState;
 
+    private bool _enemiesSpawned;
+    private bool _gameFinished;
+    private bool _victory;
+
     public Game1()
     {
         _graphics = new GraphicsDeviceManager(this)
@@ -33,6 +42,8 @@ public class Game1 : Game
             PreferredBackBufferWidth = WindowWidth,
             PreferredBackBufferHeight = WindowHeight
         };
+
+        _enemyAI = new EnemyAI(_arena);
 
         Content.RootDirectory = "Content";
         IsMouseVisible = true;
@@ -48,7 +59,7 @@ public class Game1 : Game
     {
         _spriteBatch = new SpriteBatch(GraphicsDevice);
 
-        // A 1×1 texture used to draw tiles, units, and grid lines.
+        // A 1x1 texture used to draw tiles and units.
         _pixel = new Texture2D(GraphicsDevice, 1, 1);
         _pixel.SetData(new[] { Color.White });
     }
@@ -60,19 +71,37 @@ public class Game1 : Game
         if (keyboard.IsKeyDown(Keys.Escape))
             Exit();
 
-        // Number keys select an operative class.
+        if (_gameFinished)
+        {
+            _previousKeyboardState = keyboard;
+            return;
+        }
+
+        // Select operative classes.
         if (WasKeyJustPressed(keyboard, Keys.D1))
             _selectedClass = OperativeClass.CyberTank;
+
         if (WasKeyJustPressed(keyboard, Keys.D2))
             _selectedClass = OperativeClass.NeuralSniper;
+
         if (WasKeyJustPressed(keyboard, Keys.D3))
             _selectedClass = OperativeClass.SystemHacker;
+
         if (WasKeyJustPressed(keyboard, Keys.D4))
             _selectedClass = OperativeClass.AssaultOperative;
+
         if (WasKeyJustPressed(keyboard, Keys.D5))
             _selectedClass = OperativeClass.CombatMedic;
+
         if (WasKeyJustPressed(keyboard, Keys.D6))
             _selectedClass = OperativeClass.StealthInfiltrator;
+
+        // Space activates the enemy turn.
+        if (_enemiesSpawned &&
+            WasKeyJustPressed(keyboard, Keys.Space))
+        {
+            EndPlayerTurn();
+        }
 
         MouseState mouse = Mouse.GetState();
 
@@ -80,11 +109,10 @@ public class Game1 : Game
             mouse.LeftButton == ButtonState.Pressed &&
             _previousMouseState.LeftButton == ButtonState.Released;
 
-        if (clicked)
+        if (clicked && !_gameFinished)
             HandleBoardClick(mouse.X, mouse.Y);
 
-        Window.Title =
-            $"Gridrunner: Protocol 2099 | Class: {_selectedClass} | Squad: {_operatives.Count}/{SquadSize}";
+        UpdateWindowTitle();
 
         _previousMouseState = mouse;
         _previousKeyboardState = keyboard;
@@ -103,6 +131,16 @@ public class Game1 : Game
         if (!TryGetTileAt(mouseX, mouseY, out Point tile))
             return;
 
+        // Check whether the clicked tile contains an enemy.
+        foreach (Enemy enemy in _enemies)
+        {
+            if (enemy.Tile == tile)
+            {
+                AttackEnemy(enemy);
+                return;
+            }
+        }
+
         // Clicking an operative selects it.
         for (int i = 0; i < _operatives.Count; i++)
         {
@@ -113,7 +151,7 @@ public class Game1 : Game
             }
         }
 
-        // If an operative is selected, try to move it one tile.
+        // Move the selected operative.
         if (_selectedOperativeIndex >= 0 &&
             _selectedOperativeIndex < _operatives.Count)
         {
@@ -123,18 +161,24 @@ public class Game1 : Game
                 Math.Abs(selected.Tile.X - tile.X) +
                 Math.Abs(selected.Tile.Y - tile.Y);
 
-            // Movement must be exactly one tile, up/down/left/right.
+            // Movement must be exactly one tile.
             if (distance != 1)
                 return;
 
-            // Units can only move onto floor tiles.
             if (_arena.GetTile(tile.X, tile.Y) != TileType.Floor)
                 return;
 
-            // Don't allow moving onto another operative.
+            // Do not move onto another operative.
             foreach (Operative other in _operatives)
             {
                 if (other != selected && other.Tile == tile)
+                    return;
+            }
+
+            // Do not move onto an enemy.
+            foreach (Enemy enemy in _enemies)
+            {
+                if (enemy.Tile == tile)
                     return;
             }
 
@@ -143,7 +187,7 @@ public class Game1 : Game
             return;
         }
 
-        // If no operative is selected, place one on the left half.
+        // Place operatives on the left half of the arena.
         if (_operatives.Count >= SquadSize ||
             tile.X >= Arena.Columns / 2 ||
             _arena.GetTile(tile.X, tile.Y) != TileType.Floor)
@@ -152,12 +196,113 @@ public class Game1 : Game
         }
 
         _operatives.Add(new Operative(_selectedClass, tile));
+
+        // Spawn enemies after all four operatives are placed.
+        if (_operatives.Count == SquadSize && !_enemiesSpawned)
+            SpawnEnemies();
+    }
+
+    private void AttackEnemy(Enemy enemy)
+    {
+        if (_selectedOperativeIndex < 0 ||
+            _selectedOperativeIndex >= _operatives.Count)
+        {
+            return;
+        }
+
+        Operative operative = _operatives[_selectedOperativeIndex];
+
+        int distance =
+            Math.Abs(operative.Tile.X - enemy.Tile.X) +
+            Math.Abs(operative.Tile.Y - enemy.Tile.Y);
+
+        // Operatives can attack only adjacent enemies.
+        if (distance != 1)
+            return;
+
+        enemy.TakeDamage(1);
+
+        // Remove defeated enemies.
+        if (!enemy.IsAlive)
+            _enemies.Remove(enemy);
+
+        _selectedOperativeIndex = -1;
+
+        CheckGameState();
+    }
+
+    private void SpawnEnemies()
+    {
+        _enemiesSpawned = true;
+
+        _enemies.Add(new Enemy(new Point(17, 2)));
+        _enemies.Add(new Enemy(new Point(17, 6)));
+        _enemies.Add(new Enemy(new Point(17, 10)));
+
+        CheckGameState();
+    }
+
+    private void EndPlayerTurn()
+    {
+        if (_gameFinished)
+            return;
+
+        _selectedOperativeIndex = -1;
+
+        _enemyAI.TakeEnemyTurn(_enemies, _operatives);
+
+        CheckGameState();
+    }
+
+    private void CheckGameState()
+    {
+        if (_enemiesSpawned && _enemies.Count == 0)
+        {
+            _gameFinished = true;
+            _victory = true;
+        }
+        else if (_operatives.Count == 0 && _enemiesSpawned)
+        {
+            _gameFinished = true;
+            _victory = false;
+        }
+
+        if (_selectedOperativeIndex >= _operatives.Count)
+            _selectedOperativeIndex = -1;
+    }
+
+    private void UpdateWindowTitle()
+    {
+        if (_gameFinished)
+        {
+            Window.Title = _victory
+                ? "GRIDRUNNER | VICTORY - All enemies eliminated!"
+                : "GRIDRUNNER | DEFEAT - Squad eliminated!";
+
+            return;
+        }
+
+        if (!_enemiesSpawned)
+        {
+            Window.Title =
+                $"Gridrunner: Protocol 2099 | Class: {_selectedClass} | " +
+                $"Squad: {_operatives.Count}/{SquadSize}";
+        }
+        else
+        {
+            Window.Title =
+                $"Gridrunner: Protocol 2099 | " +
+                $"Operatives: {_operatives.Count} | " +
+                $"Enemies: {_enemies.Count} | " +
+                "SPACE: Enemy Turn";
+        }
     }
 
     private bool TryGetTileAt(int mouseX, int mouseY, out Point tile)
     {
         int arenaWidth = Arena.Columns * TileSize;
         int arenaHeight = Arena.Rows * TileSize;
+
         int left = (WindowWidth - arenaWidth) / 2;
         int top = (WindowHeight - arenaHeight) / 2;
 
@@ -171,6 +316,7 @@ public class Game1 : Game
             y >= 0 && y < Arena.Rows;
 
         tile = insideArena ? new Point(x, y) : Point.Zero;
+
         return insideArena;
     }
 
@@ -182,6 +328,7 @@ public class Game1 : Game
 
         DrawArena();
         DrawOperatives();
+        DrawEnemies();
         DrawHud();
 
         _spriteBatch.End();
@@ -193,6 +340,7 @@ public class Game1 : Game
     {
         int arenaWidth = Arena.Columns * TileSize;
         int arenaHeight = Arena.Rows * TileSize;
+
         int left = (WindowWidth - arenaWidth) / 2;
         int top = (WindowHeight - arenaHeight) / 2;
 
@@ -221,6 +369,7 @@ public class Game1 : Game
         for (int column = 0; column <= Arena.Columns; column++)
         {
             int x = left + column * TileSize;
+
             DrawRectangle(
                 new Rectangle(x, top, 1, arenaHeight),
                 gridColor);
@@ -229,6 +378,7 @@ public class Game1 : Game
         for (int row = 0; row <= Arena.Rows; row++)
         {
             int y = top + row * TileSize;
+
             DrawRectangle(
                 new Rectangle(left, y, arenaWidth, 1),
                 gridColor);
@@ -255,25 +405,90 @@ public class Game1 : Game
                 rectangle,
                 GetClassColor(operative.Class));
 
-            // Draw a white border around the selected operative.
+            // Health bar.
+            DrawHealthBar(
+                rectangle.X,
+                rectangle.Y - 5,
+                rectangle.Width,
+                operative.Health,
+                Operative.MaxHealth);
+
+            // Selection outline.
             if (i == _selectedOperativeIndex)
                 DrawOutline(rectangle, Color.White);
         }
+    }
+
+    private void DrawEnemies()
+    {
+        int left = (WindowWidth - Arena.Columns * TileSize) / 2;
+        int top = (WindowHeight - Arena.Rows * TileSize) / 2;
+
+        foreach (Enemy enemy in _enemies)
+        {
+            var rectangle = new Rectangle(
+                left + enemy.Tile.X * TileSize + 5,
+                top + enemy.Tile.Y * TileSize + 5,
+                TileSize - 10,
+                TileSize - 10);
+
+            // Red enemy body.
+            DrawRectangle(rectangle, new Color(220, 45, 55));
+
+            // Darker center.
+            DrawRectangle(
+                new Rectangle(
+                    rectangle.X + 7,
+                    rectangle.Y + 7,
+                    rectangle.Width - 14,
+                    rectangle.Height - 14),
+                new Color(120, 15, 30));
+
+            // Enemy health bar.
+            DrawHealthBar(
+                rectangle.X,
+                rectangle.Y - 5,
+                rectangle.Width,
+                enemy.Health,
+                Enemy.MaxHealth);
+        }
+    }
+
+    private void DrawHealthBar(
+        int x,
+        int y,
+        int width,
+        int health,
+        int maxHealth)
+    {
+        DrawRectangle(
+            new Rectangle(x, y, width, 3),
+            new Color(65, 20, 25));
+
+        if (health <= 0)
+            return;
+
+        int healthWidth = width * health / maxHealth;
+
+        DrawRectangle(
+            new Rectangle(x, y, healthWidth, 3),
+            new Color(70, 240, 110));
     }
 
     private void DrawHud()
     {
         int arenaWidth = Arena.Columns * TileSize;
         int arenaHeight = Arena.Rows * TileSize;
+
         int left = (WindowWidth - arenaWidth) / 2;
         int top = (WindowHeight - arenaHeight) / 2;
 
-        // Marker showing the currently selected class color.
+        // Selected class marker.
         DrawRectangle(
             new Rectangle(left, top - 24, 20, 12),
             GetClassColor(_selectedClass));
 
-        // Squad slots: filled slots show unit colors, empty slots are gray.
+        // Squad slots.
         for (int i = 0; i < SquadSize; i++)
         {
             Color color = i < _operatives.Count
@@ -289,23 +504,35 @@ public class Game1 : Game
     private void DrawOutline(Rectangle rectangle, Color color)
     {
         DrawRectangle(
-            new Rectangle(rectangle.X - 2, rectangle.Y - 2,
-                rectangle.Width + 4, 2),
+            new Rectangle(
+                rectangle.X - 2,
+                rectangle.Y - 2,
+                rectangle.Width + 4,
+                2),
             color);
 
         DrawRectangle(
-            new Rectangle(rectangle.X - 2, rectangle.Bottom,
-                rectangle.Width + 4, 2),
+            new Rectangle(
+                rectangle.X - 2,
+                rectangle.Bottom,
+                rectangle.Width + 4,
+                2),
             color);
 
         DrawRectangle(
-            new Rectangle(rectangle.X - 2, rectangle.Y,
-                2, rectangle.Height),
+            new Rectangle(
+                rectangle.X - 2,
+                rectangle.Y,
+                2,
+                rectangle.Height),
             color);
 
         DrawRectangle(
-            new Rectangle(rectangle.Right, rectangle.Y,
-                2, rectangle.Height),
+            new Rectangle(
+                rectangle.Right,
+                rectangle.Y,
+                2,
+                rectangle.Height),
             color);
     }
 
@@ -313,12 +540,24 @@ public class Game1 : Game
     {
         return operativeClass switch
         {
-            OperativeClass.CyberTank => new Color(255, 170, 40),
-            OperativeClass.NeuralSniper => new Color(80, 180, 255),
-            OperativeClass.SystemHacker => new Color(190, 90, 255),
-            OperativeClass.AssaultOperative => new Color(255, 70, 70),
-            OperativeClass.CombatMedic => new Color(80, 255, 140),
-            OperativeClass.StealthInfiltrator => new Color(230, 230, 255),
+            OperativeClass.CyberTank =>
+                new Color(255, 170, 40),
+
+            OperativeClass.NeuralSniper =>
+                new Color(80, 180, 255),
+
+            OperativeClass.SystemHacker =>
+                new Color(190, 90, 255),
+
+            OperativeClass.AssaultOperative =>
+                new Color(255, 70, 70),
+
+            OperativeClass.CombatMedic =>
+                new Color(80, 255, 140),
+
+            OperativeClass.StealthInfiltrator =>
+                new Color(230, 230, 255),
+
             _ => Color.White
         };
     }
@@ -339,14 +578,29 @@ public enum OperativeClass
     StealthInfiltrator
 }
 
-public class Operative
+public class Operative : BattleUnit
 {
+    public const int MaxHealth = 3;
+
     public OperativeClass Class { get; }
-    public Point Tile { get; set; }
 
     public Operative(OperativeClass operativeClass, Point tile)
+        : base(tile, MaxHealth, GetSpeed(operativeClass))
     {
         Class = operativeClass;
-        Tile = tile;
+    }
+
+    private static int GetSpeed(OperativeClass operativeClass)
+    {
+        return operativeClass switch
+        {
+            OperativeClass.CyberTank => 4,
+            OperativeClass.NeuralSniper => 7,
+            OperativeClass.SystemHacker => 5,
+            OperativeClass.AssaultOperative => 8,
+            OperativeClass.CombatMedic => 6,
+            OperativeClass.StealthInfiltrator => 9,
+            _ => 5
+        };
     }
 }
